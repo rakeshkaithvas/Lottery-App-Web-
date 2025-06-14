@@ -1,0 +1,9 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.luckybox.use",
+    "sha256_cert_fingerprints":
+    ["4F:9E:3D:22:36:A2:E6:78:DF:12:09:EF:00:08:FA:27:48:D0:D4:36:E3:FD:E7:69:50:E5:40:D4:F3:98:E3:40"]
+  }
+}]
