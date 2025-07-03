@@ -438,4 +438,34 @@ class ScratchcardController extends Controller
     }
 }
 
-    }
+
+ public function scratchCardList(Request $request)
+{
+    $creatorId = auth()->id();
+
+    $scratchAssignments = ScratchCardAssign::whereHas('scratch', function ($query) use ($creatorId) {
+            $query->where('created_by', $creatorId);
+        })
+        ->with('user')
+        ->get();
+
+    // Group by user and count totals
+    $grouped = $scratchAssignments->groupBy('user_id')->map(function ($assigns, $userId) {
+        $user = $assigns->first()->user;
+
+        $total = $assigns->count();
+        $scratched = $assigns->where('status', 'finished')->count();
+        $status = $scratched == $total ? 'Completed' : 'Live';
+
+        return [
+            'name' => $user->name ?? 'N/A',
+            'mobile' => $user->phone ?? 'N/A', // adjust if your mobile column is named differently
+            'total_scratches' => $total,
+            'scratched' => $scratched,
+            'status' => $status,
+        ];
+    })->values(); // reset array keys
+
+    return response()->json($grouped);
+   }
+}

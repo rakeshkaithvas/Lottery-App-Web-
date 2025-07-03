@@ -22,5 +22,10 @@ class ScratchCardUserProgress extends Model
     {
         return $this->belongsTo(Scratch::class);
     }
+
+    public function assign()
+    {
+        return $this->belongsTo(ScratchCardAssign::class, 'scratch_id');
+    }
 }
 ?>

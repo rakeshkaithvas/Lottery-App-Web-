@@ -13,6 +13,12 @@ use App\Events\EmailVerificationEvent;
 use App\Models\Referral;
 use App\Models\ReferSetting;
 use App\Models\WalletTransaction;
+use App\Models\Lottery;
+use App\Models\LotteryTicket;
+use App\Models\Scratch;
+use App\Models\ScratchCardAssign;
+use App\Models\ScratchCardUserProgress;
+use App\Models\Withdraw;
 use SimpleSoftwareIO\QrCode\Facades\QrCode;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\DB;
@@ -408,97 +414,110 @@ class UserController extends Controller
 
     public function wallettransfer(Request $req)
     {
-        // Validate the request
-        $req->validate([
-            'receiver_id' => 'required|exists:users,id|different:'.auth()->id(),
-            'amount' => 'required|numeric|min:1',
-            'inv_amount' => 'numeric|min:0',
-            
-        ]);
-        // Retrieve sender
-        $sender  = User::findOrFail(auth()->user()->id);
-        if (!$sender) {
-                return response()->json(['message' => 'Unauthenticated'], 401);
-        }
-        $receiver = User::find($req->receiver_id);
-        $amount = $req->amount;
-        
-        // Check if sender has sufficient balance
-        if ($sender->balance >= $amount) {
-            DB::beginTransaction();
-             try {
-                // Deduct amount from sender
-                $sender->balance -= $amount;
-                $sender->save();
-                 // Add amount to receiver
-                $receiver->balance += $amount;
-                $receiver->save();
-
-                // Optional: Store transaction log
-                WalletTransaction::create([
-                    'sender_id' => $sender->id,
-                    'receiver_id' => $receiver->id,
-                    'amount' => $amount,
-                    'inv_amount' => $req->inv_amount,
-                    'type' => 'transfer',
-                    'comments' => $req->comments,
-                    'status' => 'completed',
-                ]);
-               
-                DB::commit();
-                return response()->json([
-                    'message' => 'Amount transferred successfully',
-                    'sender_balance' => $sender->balance,
-                    'receiver_balance' => $receiver->balance,
-                ], 200);
-            } catch (\Exception $e) {
-                DB::rollBack();
-                return response()->json(['message' => 'Transfer failed', 'error' => $e->getMessage()], 500);
+        // If type is "mobile", lookup receiver_id using mobile number
+        if ($req->type === 'mobile') {
+            if (!$req->has('mobile')) {
+                return response()->json(['message' => 'Mobile number is required for type "mobile"'], 422);
             }
 
-        } else {
+            $receiverUser = User::where('phone', $req->mobile)->first();
+
+            if (!$receiverUser) {
+                return response()->json(['message' => 'No user found with this mobile number'], 404);
+            }
+
+            // Inject receiver_id into request for validation
+            $req->merge(['receiver_id' => $receiverUser->id]);
+        }
+
+        // Validate request
+        $req->validate([
+            'receiver_id' => 'required|exists:users,id|different:' . auth()->id(),
+            'amount' => 'required|numeric|min:1',
+            'inv_amount' => 'numeric|min:0',
+        ]);
+
+        // Get sender and receiver
+        $sender = User::findOrFail(auth()->id());
+        $receiver = User::findOrFail($req->receiver_id);
+        $amount = $req->amount;
+
+        if ($sender->balance < $amount) {
             return response()->json(['message' => 'Sender has insufficient balance'], 400);
         }
+
+        DB::beginTransaction();
+        try {
+            // Deduct and add balance
+            $sender->balance -= $amount;
+            $sender->save();
+
+            $receiver->balance += $amount;
+            $receiver->save();
+
+            // Log transaction
+            WalletTransaction::create([
+                'sender_id' => $sender->id,
+                'receiver_id' => $receiver->id,
+                'amount' => $amount,
+                'inv_amount' => $req->inv_amount,
+                'type' => 'transfer',
+                'comments' => $req->comments,
+                'status' => 'completed',
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Amount transferred successfully',
+                'sender_balance' => $sender->balance,
+                'receiver_balance' => $receiver->balance,
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['message' => 'Transfer failed', 'error' => $e->getMessage()], 500);
+        }
     }
+
 
     public function shopsusers(Request $request)
-{
-    try {
-         $baseUrl = config('app.url'); // Base app URL
+    {
+        try {
+            $baseUrl = config('app.url'); // Base app URL
 
-        // Start query with approved and non-null shop_name
-        $query = User::where('status', 'approved')
-            ->whereNotNull('shop_name')
-            ->select('shop_name', 'shop_image', 'shop_category', 'shop_address', 'discount');
+            // Start query with approved and non-null shop_name
+            $query = User::where('status', 'approved')
+                ->whereNotNull('shop_name')
+                ->select('shop_name', 'shop_image', 'shop_category', 'shop_address', 'discount');
 
-        // If search parameter exists, filter by shop_name or shop_address
-        if ($request->has('search') && !empty($request->search)) {
-            $search = $request->search;
+            // If search parameter exists, filter by shop_name or shop_address
+            if ($request->has('search') && !empty($request->search)) {
+                $search = $request->search;
 
-            $query->where(function ($q) use ($search) {
-                $q->where('shop_name', 'like', "%{$search}%")
-                  ->orWhere('shop_address', 'like', "%{$search}%");
-            });
+                $query->where(function ($q) use ($search) {
+                    $q->where('shop_name', 'like', "%{$search}%")
+                    ->orWhere('shop_address', 'like', "%{$search}%");
+                });
+            }
+
+            // Get results
+            $users = $query->get();
+
+            // Add full image URL
+            $users->transform(function ($user) {
+            $user->shop_image = $user->shop_image ? asset($user->shop_image) : null;
+        
+            return $user;
+        });
+            return response()->json($users);
+        } catch (\Exception $e) {
+            Log::error('Error fetching active users: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Something went wrong while fetching active users.'
+            ], 500);
         }
-
-        // Get results
-        $users = $query->get();
-
-        // Add full image URL
-        $users->transform(function ($user) {
-        $user->shop_image = $user->shop_image ? asset($user->shop_image) : null;
-    
-         return $user;
-    });
-         return response()->json($users);
-    } catch (\Exception $e) {
-        Log::error('Error fetching active users: ' . $e->getMessage());
-        return response()->json([
-            'success' => false,
-            'message' => 'Something went wrong while fetching active users.'
-        ], 500);
     }
-}
 
 public function walletHistory(Request $request)
 {
@@ -536,4 +555,92 @@ public function walletHistory(Request $request)
 
     return response()->json($transactions);
    }
+
+
+   public function deleteUser()
+    {
+        try {
+            DB::beginTransaction();
+
+            $user = Auth::user(); // Logged-in user
+
+            if (!$user) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Unauthorized.',
+                ], 401);
+            }
+
+            $userId = $user->id;
+
+            // All previous deletion logic using $userId instead of $id
+            // (exact same as before, just replacing $id with $userId)
+
+            // Step 1: Lotteries & Tickets
+            $lotteries = Lottery::where('created_by', $userId)->get();
+            $lotteryCount = $lotteries->count();
+            $ticketCount = 0;
+
+            if ($lotteryCount > 0) {
+                $lotteryIds = $lotteries->pluck('id')->toArray();
+
+                $ticketCount = LotteryTicket::whereIn('lottery_id', $lotteryIds)->count();
+                LotteryTicket::whereIn('lottery_id', $lotteryIds)->delete();
+                Lottery::whereIn('id', $lotteryIds)->delete();
+            }
+
+            // Step 2: Wallet Transactions
+            $walletTransactionCount = WalletTransaction::where('sender_id', $userId)
+                ->orWhere('receiver_id', $userId)
+                ->count();
+            WalletTransaction::where('sender_id', $userId)
+                ->orWhere('receiver_id', $userId)
+                ->delete();
+
+            // Step 3: Referrals
+            $referralCount = Referral::where('referrer_id', $userId)
+                ->orWhere('referred_id', $userId)
+                ->count();
+            Referral::where('referrer_id', $userId)
+                ->orWhere('referred_id', $userId)
+                ->delete();
+
+            // Step 4: Scratches
+            $scratchCount = Scratch::where('created_by', $userId)->count();
+            Scratch::where('created_by', $userId)->delete();
+
+            // Step 5: Scratch Card Assigns
+            $scratchAssignCount = ScratchCardAssign::where('normal_user_scan_qr_id', $userId)
+                ->orWhere('verified_user_id', $userId)
+                ->count();
+            ScratchCardAssign::where('normal_user_scan_qr_id', $userId)
+                ->orWhere('verified_user_id', $userId)
+                ->delete();
+
+            // Step 6: Scratch Card User Progress
+            $progressCount = ScratchCardUserProgress::where('user_id', $userId)->count();
+            ScratchCardUserProgress::where('user_id', $userId)->delete();
+
+            // Step 7: Withdraws
+            $withdrawCount = Withdraw::where('user_id', $userId)->count();
+            Withdraw::where('user_id', $userId)->delete();
+
+            // Step 8: Finally delete user
+            $user->delete();
+
+            DB::commit();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => "User deleted. Lotteries: $lotteryCount, Tickets: $ticketCount, Wallet Tx: $walletTransactionCount, Referrals: $referralCount, Scratches: $scratchCount, Scratch Assigns: $scratchAssignCount, Progress: $progressCount, Withdraws: $withdrawCount",
+            ], 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'status' => 'error',
+                'message' => 'An error occurred: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
 }

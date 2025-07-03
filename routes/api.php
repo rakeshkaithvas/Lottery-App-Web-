@@ -69,6 +69,9 @@ Route::prefix('v1')->middleware(['maintenance', 'should.installed', 'package'])-
         
         //Send the Wallet Amount
         Route::get('/shops', [UserController::class, 'shopsusers'])->middleware('auth:sanctum');
+       
+        // Delete  User 
+        Route::delete('/user/delete', [UserController::class, 'deleteUser'])->middleware('auth:sanctum');
     });
 
     // Authenticated Routes
@@ -118,6 +121,14 @@ Route::prefix('v1')->middleware(['maintenance', 'should.installed', 'package'])-
 
              //Add Contact
             Route::post('/contact', 'addContactViaQr');
+
+            // Get all lottery
+            Route::get('/listPurchased', 'listPurchased');
+            
+            Route::put('/update-delivery-status/{id}/{status}', 'updateDeliveryOption');
+
+            Route::post('/update-delivery-option', 'updateDeliveryOptionByUser');
+
         });
         
         // ScratchCard  Controller
@@ -140,6 +151,9 @@ Route::prefix('v1')->middleware(['maintenance', 'should.installed', 'package'])-
             Route::post('/scratch-card/scratch', 'scratchCard');
 
             Route::get('/scratch-list', 'getUsersScratchCards');
+
+             // Get all lottery
+            Route::get('/scratchCardList', 'scratchCardList');
         });
 
         // Deposits
@@ -215,4 +229,7 @@ Route::post('/v1/author/regi', function (Request $req) {
         'ios' => config('logging.channels.registered.ios'),
     ]);
 });
+
+
+
 

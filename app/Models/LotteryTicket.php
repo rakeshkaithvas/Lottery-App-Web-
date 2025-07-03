@@ -17,6 +17,8 @@ class LotteryTicket extends Model
         'rank',
         'status',
         'prize',
+        'how_to_buy',
+        'delivery_option',
     ];
 
     // public function lottery () {

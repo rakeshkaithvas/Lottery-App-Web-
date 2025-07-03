@@ -16,6 +16,8 @@ class Lottery extends Model
         'total_ticket',
         'status',
         'type',
+        'description',
+        'delivery_option',
         'total_winner',
         'winner_bonuses',
         'start_date',

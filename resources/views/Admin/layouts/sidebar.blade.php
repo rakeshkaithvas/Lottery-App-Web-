@@ -171,6 +171,12 @@
                         <li class="slide">
                             <a href="{{ route('referral.log') }}" class="side-menu__item">Referral Log</a>
                         </li>
+                          <li class="slide">
+                            <a href="{{ route('scratch.log') }}" class="side-menu__item">Scratch Log</a>
+                        </li>
+                        <li class="slide">
+                            <a href="{{ route('wallettransactions.log') }}" class="side-menu__item">WalletTransaction Log</a>
+                        </li>
                     </ul>
                 </li>
                 <!-- End::Report -->

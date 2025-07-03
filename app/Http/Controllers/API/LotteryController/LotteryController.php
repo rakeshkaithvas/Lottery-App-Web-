@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use App\Models\Contact;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class LotteryController extends Controller
 {
@@ -79,7 +80,8 @@ class LotteryController extends Controller
             LotteryTicket::create([
                 'lottery_id' => $lottery->id,
                 'user_id' => $user->id,
-                'ticket_number' => $ticket_number
+                'ticket_number' => $ticket_number,
+                'how_to_buy' =>'Manual',
             ]);
         }
 
@@ -93,7 +95,7 @@ class LotteryController extends Controller
 public function getAllLottery(Request $request)
 {
     $query = Lottery::where('status', 'active')
-        ->with('lotteryTickets');
+        ->with(['lotteryTickets', 'creator']); // eager-load user (creator)
 
     if ($request->has('created_by')) {
         $query->where('created_by', $request->created_by);
@@ -104,37 +106,40 @@ public function getAllLottery(Request $request)
     $lotteries = $query->get()->map(function ($lottery) use ($today) {
         $lotteryArray = $lottery->toArray();
 
+        // Decode winner bonuses if stored as JSON string
         if (is_string($lotteryArray['winner_bonuses'])) {
             $lotteryArray['winner_bonuses'] = json_decode($lotteryArray['winner_bonuses']);
         }
 
+        // Format draw date
         $drawDate = \Carbon\Carbon::parse($lottery->draw_date);
         $lotteryArray['draw_date'] = $drawDate->toDateTimeString();
+
+        // Add status label
         $lotteryArray['status_label'] = $drawDate->lt($today) ? 'Expired' : 'Live';
+
+        // Add full user data of the creator
+        $lotteryArray['creator'] = $lottery->creator;
 
         return $lotteryArray;
     });
 
-    // Sort by: today's draws first, then future, then past; each in ASC time order
+    // Sort by today's draw first, then future, then past
     $sorted = $lotteries->sort(function ($a, $b) use ($today) {
         $aDate = \Carbon\Carbon::parse($a['draw_date']);
         $bDate = \Carbon\Carbon::parse($b['draw_date']);
 
-        // Assign priority group
         $aGroup = $aDate->isSameDay($today) ? 0 : ($aDate->greaterThan($today) ? 1 : 2);
         $bGroup = $bDate->isSameDay($today) ? 0 : ($bDate->greaterThan($today) ? 1 : 2);
 
-        // If different groups, sort by group
-        if ($aGroup !== $bGroup) {
-            return $aGroup <=> $bGroup;
-        }
-
-        // If same group, sort by actual datetime ascending
-        return $aDate->timestamp <=> $bDate->timestamp;
+        return $aGroup === $bGroup
+            ? $aDate->timestamp <=> $bDate->timestamp
+            : $aGroup <=> $bGroup;
     });
 
     return response()->json($sorted->values());
 }
+
 
 
    public function getSingleLotteryPurchasedTicket ($id)
@@ -151,7 +156,7 @@ public function getAllLottery(Request $request)
         return response()->json($tickets);
     }
 
-   public function getTickets()
+    public function getTickets()
     {
         // Get auth user
         $user = auth()->user();
@@ -159,6 +164,7 @@ public function getAllLottery(Request $request)
         // Get my applied tickets with lottery and user relationship
         $tickets = LotteryTicket::where('user_id', $user->id)
             ->with(['lottery', 'user'])
+            ->orderBy('created_at', 'desc') // latest tickets first
             ->get();
 
         // Map the tickets to include all fields + extra fields
@@ -168,13 +174,17 @@ public function getAllLottery(Request $request)
             // Add user name
             $ticketArray['winner_name'] = $ticket->user->name ?? null;
 
-            // Add lottery name
-            $ticketArray['lottery_name'] = $ticket->lottery->name ?? null;
-
-            // Add status_label inside the lottery array
+            // Add lottery name and delivery_option
             if ($ticket->lottery) {
+                $ticketArray['lottery_name'] = $ticket->lottery->name ?? null;
+                $ticketArray['lottery_delivery_option'] = $ticket->lottery->delivery_option ?? null;
+
+                // Add status_label to the nested lottery
                 $drawDate = \Carbon\Carbon::parse($ticket->lottery->draw_date);
                 $ticketArray['lottery']['status_label'] = $drawDate->isPast() ? 'Expired' : 'Live';
+            } else {
+                $ticketArray['lottery_name'] = null;
+                $ticketArray['delivery_option'] = null;
             }
 
             // Remove full user data
@@ -185,6 +195,7 @@ public function getAllLottery(Request $request)
 
         return response()->json($data);
     }
+
     
     public function checkLotteryStatus($ticketNo)
     {
@@ -203,6 +214,7 @@ public function getAllLottery(Request $request)
     /* Create an API for the */
     public function apiCreateLottery(Request $req)
     {
+        
         // Get auth user
         $user = auth()->user();
         $validator = Validator::make($req->all(), [ 
@@ -217,6 +229,8 @@ public function getAllLottery(Request $request)
             'winner_bonuses' => 'required|array|size:' . $req->input('total_winner'),
             'winner_bonus_images' => 'array',
             'winner_bonus_images.*' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg|max:2048',
+            'description'=>'required',
+            'delivery_option' =>'required',
         ]);
 
         if ($validator->fails()) {
@@ -256,7 +270,7 @@ public function getAllLottery(Request $request)
                     'image' => $imagePath,
                 ];
             }
-
+           
             $lottery = Lottery::create([
                 'created_by'=>$user->id,
                 'name' => $req->name,
@@ -267,6 +281,8 @@ public function getAllLottery(Request $request)
                 'start_date' => $req->start_date,
                 'draw_date' => $req->draw_date,
                 'type' => $req->type,
+                'description' => $req->description,
+                'delivery_option' => $req->delivery_option,
                 'total_winner' => $req->total_winner,
                 'winner_bonuses' => json_encode($combined),
             ]);
@@ -336,6 +352,24 @@ public function getAllLottery(Request $request)
 
 public function addContactViaQr(Request $request)
     {
+         // If type is "mobile", lookup receiver_id using mobile number
+        $how_to_buy='QR';
+         if ($request->type === 'mobile') {
+            if (!$request->has('mobile')) {
+                return response()->json(['message' => 'Mobile number is required for type "mobile"'], 422);
+            }
+
+            $receiverUser = User::where('phone', $request->mobile)->first();
+
+            if (!$receiverUser) {
+                return response()->json(['message' => 'No user found with this mobile number'], 404);
+            }
+
+            // Inject receiver_id into request for validation
+            $request->merge(['qr_user_id' => $receiverUser->id]);
+            $how_to_buy='Mobile';
+        }
+        
         $validatedData = $request->validate([
             'qr_user_id' => 'required|exists:users,id',
             'lottery_id' => 'required|exists:lotteries,id',
@@ -425,6 +459,7 @@ public function addContactViaQr(Request $request)
                 'lottery_id' => $lottery->id,
                 'user_id' => $validatedData['qr_user_id'],
                 'ticket_number' => $ticket_number,
+                'how_to_buy' => $how_to_buy,
             ]);
         }
 
@@ -438,5 +473,129 @@ public function addContactViaQr(Request $request)
         return response()->json(['message' => 'User added as contact and Contest Coupans purchased successfully.']);
     }
 
-    
+public function listPurchased(Request $req)
+{
+    $userId = auth()->id(); // Logged-in user ID
+
+    // Load lotteries created by the logged-in user, with tickets and users
+    $lotteries = Lottery::with([
+        'creator:id,name,email',
+        'lotteryTickets.user:id,name,phone'
+    ])
+    ->where('created_by', $userId)
+    ->orderBy('id', 'desc')
+    ->get();
+
+    // Filter based on ticket buyer's name and phone
+    if ($req->filled('name') || $req->filled('phone')) {
+        $lotteries = $lotteries->filter(function ($lottery) use ($req) {
+            return $lottery->lotteryTickets->contains(function ($ticket) use ($req) {
+                $user = $ticket->user;
+
+                $matchesName = $req->filled('name') ? $user && stripos($user->name, $req->name) !== false : true;
+                $matchesPhone = $req->filled('phone') ? $user && $user->phone === $req->phone : true;
+
+                return $matchesName && $matchesPhone;
+            });
+        })->values();
+    }
+
+    // Filter by specific lottery ID
+    if ($req->filled('lottery_id')) {
+        $lotteries = $lotteries->where('id', $req->lottery_id)->values();
+    }
+
+    // Build and return structured response
+    $data = $lotteries->map(function ($lottery) {
+        return [
+            'lottery_id' => $lottery->id,
+            'lottery_name' => $lottery->name,
+            'description' => $lottery->description,
+            'delivery_option' => $lottery->delivery_option,
+
+            'created_by_user' => [
+                'id' => $lottery->creator->id ?? null,
+                'name' => $lottery->creator->name ?? null,
+            ],
+
+            'tickets' => $lottery->lotteryTickets->sortByDesc('id')->map(function ($ticket) {
+                return [
+                    'ticket_id' => $ticket->id,
+                    'ticket_number' => $ticket->ticket_number,
+                    'rank' => $ticket->rank,
+                    'prize' => $ticket->prize,
+                    'how_to_buy' => $ticket->how_to_buy ?? 'N/A',
+                    'delivery_option' => $ticket->delivery_option ?? 'N/A',
+                    'created_at' => $ticket->created_at,
+
+                    'purchased_by_user' => [
+                        'id' => $ticket->user->id ?? null,
+                        'name' => $ticket->user->name ?? null,
+                        'phone' => $ticket->user->phone ?? null,
+                    ],
+                ];
+            })->values(),
+        ];
+    });
+
+    return response()->json($data, 200);
+}
+
+public function updateDeliveryOption($id, $status)
+{
+    $userId = auth()->id();
+
+    if (!in_array($status, ['Pending', 'shop pickup', 'Delivery', 'Delivered', 'Cancelled'])) {
+        return response()->json([
+            'status' => false,
+            'message' => 'Invalid delivery status.'
+        ], 422);
+    }
+
+    $lottery = Lottery::where('id', $id)
+                    ->where('created_by', $userId)
+                    ->first();
+
+    if (!$lottery) {
+        return response()->json([
+            'status' => false,
+            'message' => 'Lottery not found or unauthorized.'
+        ], 404);
+    }
+
+    $lottery->delivery_option = $status;
+    $lottery->save();
+
+    return response()->json([
+        'status' => true,
+        'message' => 'Delivery option updated successfully.',
+        'data' => $lottery
+    ]);
+}
+
+public function updateDeliveryOptionByUser(Request $request)
+    {
+        $request->validate([
+            'ticket_id' => 'required|integer|exists:lottery_tickets,id',
+             'delivery_option' => 'required|string|in:Pending,Delivered,Cancelled',
+        ]);
+
+        $ticket = LotteryTicket::find($request->ticket_id);
+
+        if (!$ticket) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Ticket not found.'
+            ], 404);
+        }
+
+        $ticket->delivery_option = $request->delivery_option;
+        $ticket->save();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Delivery option updated successfully.',
+            'data' => $ticket
+        ]);
+    }
 }

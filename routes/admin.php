@@ -200,6 +200,12 @@ Route::middleware(['auth:admin', 'should.installed', 'demo'])->prefix('admin')->
 
         // Referral Logs
         Route::get('referrals', 'referralLog')->name('referral.log');
+
+        // Scratch Logs
+        Route::get('scracthcards', 'scratchCardLog')->name('scratch.log');
+
+        // Wallet Transaction Logs
+        Route::get('wallettransactions', 'wallettransactionsLog')->name('wallettransactions.log');
     });
 
     // Notification Sections

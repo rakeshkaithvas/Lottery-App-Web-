@@ -22,5 +22,15 @@ class ScratchCardAssign extends Model
     {
         return $this->belongsTo(User::class, 'normal_user_scan_qr_id');
     }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class, 'id');
+    }
+
+    public function progress()
+    {
+        return $this->hasMany(\App\Models\ScratchCardUserProgress::class, 'scratch_id', 'scratch_id');
+    }
 }
 ?>

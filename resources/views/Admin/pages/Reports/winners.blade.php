@@ -8,11 +8,31 @@
 @include('Admin.partials.alerts.errors')
 
 @section('button')
-<form action="{{ route('winner.log') }}" method="GET">
-    <div class="input-group">
-        <input type="text" class="form-control bg-light border-0" placeholder="Search By Email" aria-describedby="search-contact-member" name="email" value="{{ request()->input('email') }}">
-        <button class="btn btn-light" type="submit" id="search-contact-member"><i class="ri-search-line text-muted"></i></button>
-    </div>
+<form action="{{ route('winner.log') }}" method="GET" class="d-flex gap-2 align-items-center">
+
+    {{-- Email Filter --}}
+    <input type="text" name="email" placeholder="Search by Email"
+           value="{{ request('email') }}" class="form-control bg-light border-0">
+
+    {{-- Lottery Dropdown --}}
+    <select name="lottery_id" class="form-select bg-light border-0">
+        <option value="">-- Select Lottery --</option>
+        @foreach($lotteries as $lottery)
+            <option value="{{ $lottery->id }}" {{ request('lottery_id') == $lottery->id ? 'selected' : '' }}>
+                {{ $lottery->name }}
+            </option>
+        @endforeach
+    </select>
+
+    {{-- Search Button --}}
+    <button class="btn btn-light" type="submit" title="Search">
+        <i class="ri-search-line text-muted"></i>
+    </button>
+
+    {{-- Reset Button --}}
+    <a href="{{ route('winner.log') }}" class="btn btn-secondary" title="Reset">
+        <i class="ri-refresh-line"></i>
+    </a>
 </form>
 @endsection
 
@@ -22,6 +42,7 @@
             <table class="table text-nowrap">
                 <thead class="table-secondary">
                     <tr>
+                         <th scope="col">#</th>
                         <th scope="col">User</th>
                         <th scope="col">Lottery Name</th>
                         <th scope="col">Ticket Number</th>
@@ -31,8 +52,9 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach ($data as $ticket)
+                    @foreach ($data as $i=>$ticket)
                         <tr>
+                            <th scope="row">{{ $data->firstItem() + $i }}</th>
                             <th scope="row">
                                 <p class="fw-semibold mb-0 lh-1">
                                                 {{ $ticket->user->name }}</p>
